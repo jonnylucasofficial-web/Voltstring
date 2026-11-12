@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Voltstring VERSION 1.2.1)
+project(Voltstring VERSION 1.3.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
@@ -16,7 +16,7 @@ endif()
 
 option(COPY_PLUGINS "Copy plugins to system folders after build" ON)
 
-set(VS_FORMATS VST3)
+set(VS_FORMATS VST3 Standalone)
 if(APPLE)
     list(APPEND VS_FORMATS AU)
 endif()
@@ -33,6 +33,8 @@ juce_add_plugin(Voltstring
     VST3_CATEGORIES Fx Generator
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT "Voltstring needs audio input access to hear your guitar."
     COPY_PLUGIN_AFTER_BUILD ${COPY_PLUGINS})
 
 target_sources(Voltstring PRIVATE

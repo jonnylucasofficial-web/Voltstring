@@ -10,11 +10,12 @@ jobs:
       - name: "Configure (universal - Apple Silicon + Intel)"
         run: cmake -B build -G Xcode -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCOPY_PLUGINS=OFF
       - name: Build AU + VST3
-        run: cmake --build build --config Release --target Voltstring_AU Voltstring_VST3 -- -quiet
+        run: cmake --build build --config Release --target Voltstring_AU Voltstring_VST3 Voltstring_Standalone -- -quiet
       - name: Ad-hoc sign
         run: |
           codesign --force --deep -s - build/Voltstring_artefacts/Release/AU/Voltstring.component
           codesign --force --deep -s - build/Voltstring_artefacts/Release/VST3/Voltstring.vst3
+          codesign --force --deep -s - build/Voltstring_artefacts/Release/Standalone/Voltstring.app
       - name: Validate AU
         run: |
           mkdir -p ~/Library/Audio/Plug-Ins/Components
@@ -23,7 +24,8 @@ jobs:
           auval -v aufx Vlts Jluc
       - name: Make installer
         run: |
-          mkdir -p root/Library/Audio/Plug-Ins/Components root/Library/Audio/Plug-Ins/VST3
+          mkdir -p root/Library/Audio/Plug-Ins/Components root/Library/Audio/Plug-Ins/VST3 root/Applications
+          cp -R build/Voltstring_artefacts/Release/Standalone/Voltstring.app root/Applications/
           cp -R build/Voltstring_artefacts/Release/AU/Voltstring.component root/Library/Audio/Plug-Ins/Components/
           cp -R build/Voltstring_artefacts/Release/VST3/Voltstring.vst3 root/Library/Audio/Plug-Ins/VST3/
           pkgbuild --analyze --root root components.plist
@@ -47,13 +49,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete latest --yes --cleanup-tag -R ${{ github.repository }} || true
-          gh release create latest Voltstring-Installer.pkg -R ${{ github.repository }} --title "Voltstring for Mac" --notes "Download Voltstring-Installer.pkg below, double-click it, then rescan plug-ins in Ableton."
+          gh release create latest Voltstring-Installer.pkg -R ${{ github.repository }} --title "Voltstring for Mac" --notes "Download Voltstring-Installer.pkg below and open it. Installs the AU and VST3 plug-ins plus the standalone Voltstring app in Applications."
   windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
       - run: cmake -B build -DCOPY_PLUGINS=OFF
-      - run: cmake --build build --config Release --target Voltstring_VST3
+      - run: cmake --build build --config Release --target Voltstring_VST3 Voltstring_Standalone
       - uses: actions/upload-artifact@v5
         with:
           name: Voltstring-Windows-VST3
