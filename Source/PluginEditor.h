@@ -22,6 +22,7 @@ public:
 
 private:
     void timerCallback() override;
+    void refreshPresetBox();
 
     struct Knob
     {
@@ -32,6 +33,8 @@ private:
 
     VoltstringProcessor& proc;
     VoltstringLook look;
+    juce::ComboBox presetBox;
+    juce::TextButton prevButton { "<" }, nextButton { ">" };
     std::vector<std::unique_ptr<Knob>> knobs;
     std::array<juce::TextButton, 5> engineButtons;
     float shownNote = -1.0f, shownLevel = 0.0f;

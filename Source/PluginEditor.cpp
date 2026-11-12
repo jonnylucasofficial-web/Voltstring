@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "Presets.h"
 
 namespace colours
 {
@@ -27,6 +28,14 @@ VoltstringLook::VoltstringLook()
     setColour (juce::TextButton::buttonOnColourId, colours::accent);
     setColour (juce::TextButton::textColourOffId, colours::dim);
     setColour (juce::TextButton::textColourOnId, colours::bg);
+    setColour (juce::ComboBox::backgroundColourId, colours::panel);
+    setColour (juce::ComboBox::outlineColourId, colours::track);
+    setColour (juce::ComboBox::textColourId, colours::text);
+    setColour (juce::ComboBox::arrowColourId, colours::accent);
+    setColour (juce::PopupMenu::backgroundColourId, colours::panel);
+    setColour (juce::PopupMenu::textColourId, colours::text);
+    setColour (juce::PopupMenu::headerTextColourId, colours::accent);
+    setColour (juce::PopupMenu::highlightedBackgroundColourId, colours::accent.withAlpha (0.35f));
 }
 
 void VoltstringLook::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos,
@@ -110,14 +119,53 @@ VoltstringEditor::VoltstringEditor (VoltstringProcessor& p) : AudioProcessorEdit
         addAndMakeVisible (b);
     }
 
+    // preset browser, grouped by category
+    juce::String lastCat;
+    for (int i = 0; i < numVoltstringPresets; ++i)
+    {
+        if (lastCat != voltstringPresets[i].category)
+        {
+            if (i > 0) presetBox.addSeparator();
+            presetBox.addSectionHeading (voltstringPresets[i].category);
+            lastCat = voltstringPresets[i].category;
+        }
+        presetBox.addItem (voltstringPresets[i].name, i + 1);
+    }
+    presetBox.setTextWhenNothingSelected ("Presets");
+    presetBox.onChange = [this]
+    {
+        auto id = presetBox.getSelectedId();
+        if (id > 0 && id - 1 != proc.getCurrentProgram())
+            proc.setCurrentProgram (id - 1);
+    };
+    auto step = [this] (int d)
+    {
+        const int n = numVoltstringPresets;
+        proc.setCurrentProgram ((proc.getCurrentProgram() + d + n) % n);
+        refreshPresetBox();
+    };
+    prevButton.onClick = [step] { step (-1); };
+    nextButton.onClick = [step] { step (1); };
+    addAndMakeVisible (presetBox);
+    addAndMakeVisible (prevButton);
+    addAndMakeVisible (nextButton);
+    refreshPresetBox();
+
     setSize (780, 440);
     startTimerHz (30);
+}
+
+void VoltstringEditor::refreshPresetBox()
+{
+    presetBox.setSelectedId (proc.getCurrentProgram() + 1, juce::dontSendNotification);
 }
 
 VoltstringEditor::~VoltstringEditor() { setLookAndFeel (nullptr); }
 
 void VoltstringEditor::timerCallback()
 {
+    if (presetBox.getSelectedId() != proc.getCurrentProgram() + 1)
+        refreshPresetBox();
     const int engine = (int) proc.apvts.getRawParameterValue ("engine")->load();
     for (int i = 0; i < 5; ++i)
         engineButtons[(size_t) i].setToggleState (i == engine, juce::dontSendNotification);
@@ -180,6 +228,13 @@ void VoltstringEditor::paint (juce::Graphics& g)
 
 void VoltstringEditor::resized()
 {
+    auto bar = juce::Rectangle<int> (300, 28, getWidth() - 300 - 262, 28);
+    nextButton.setBounds (bar.removeFromRight (28));
+    bar.removeFromRight (4);
+    prevButton.setBounds (bar.removeFromRight (28));
+    bar.removeFromRight (6);
+    presetBox.setBounds (bar);
+
     auto engineRow = juce::Rectangle<int> (24, 80, getWidth() - 48, 30);
     const int bw = engineRow.getWidth() / 5;
     for (auto& b : engineButtons)

@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "Presets.h"
 #include <cmath>
 #include <cstring>
 
@@ -55,6 +56,7 @@ VoltstringProcessor::VoltstringProcessor()
                         .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "VOLTSTRING", createLayout())
 {
+    setCurrentProgram (0);
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout VoltstringProcessor::createLayout()
@@ -385,6 +387,25 @@ void VoltstringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     displayLevel.store (env);
 }
 
+int VoltstringProcessor::getNumPrograms() { return numVoltstringPresets; }
+
+const juce::String VoltstringProcessor::getProgramName (int index)
+{
+    if (! juce::isPositiveAndBelow (index, numVoltstringPresets)) return {};
+    return juce::String (voltstringPresets[index].category) + " - " + voltstringPresets[index].name;
+}
+
+void VoltstringProcessor::setCurrentProgram (int index)
+{
+    if (! juce::isPositiveAndBelow (index, numVoltstringPresets)) return;
+    currentPreset = index;
+    for (int i = 0; i < numPresetParams; ++i)
+        if (auto* p = apvts.getParameter (presetParamIds[i]))
+            p->setValueNotifyingHost (p->convertTo0to1 (voltstringPresets[index].v[i]));
+    apvts.state.setProperty ("preset", index, nullptr);
+    updateHostDisplay (ChangeDetails().withProgramChanged (true));
+}
+
 void VoltstringProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     if (auto xml = apvts.copyState().createXml())
@@ -395,7 +416,10 @@ void VoltstringProcessor::setStateInformation (const void* data, int sizeInBytes
 {
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
         if (xml->hasTagName (apvts.state.getType()))
+        {
             apvts.replaceState (juce::ValueTree::fromXml (*xml));
+            currentPreset = juce::jlimit (0, numVoltstringPresets - 1, (int) apvts.state.getProperty ("preset", 0));
+        }
 }
 
 juce::AudioProcessorEditor* VoltstringProcessor::createEditor() { return new VoltstringEditor (*this); }

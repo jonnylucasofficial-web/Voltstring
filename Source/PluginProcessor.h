@@ -29,10 +29,10 @@ public:
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 2.0; }
 
-    int getNumPrograms() override { return 1; }
-    int getCurrentProgram() override { return 0; }
-    void setCurrentProgram (int) override {}
-    const juce::String getProgramName (int) override { return "Default"; }
+    int getNumPrograms() override;
+    int getCurrentProgram() override { return currentPreset; }
+    void setCurrentProgram (int index) override;
+    const juce::String getProgramName (int index) override;
     void changeProgramName (int, const juce::String&) override {}
 
     void getStateInformation (juce::MemoryBlock& destData) override;
@@ -49,6 +49,7 @@ public:
 
 private:
     static constexpr int numVoices = 8;
+    int currentPreset = 0;
 
     void analyse();                 // runs YIN on the analysis buffer
     float processPitchInput (float monoIn);
