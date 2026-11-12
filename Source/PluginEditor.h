@@ -39,6 +39,8 @@ private:
     std::array<juce::TextButton, 5> engineButtons;
     juce::TextButton envButton { "OFF" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> envAttachment;
+    juce::TextButton preButton { "OFF" }, postButton { "OFF" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> preAttachment, postAttachment;
     float shownNote = -1.0f, shownLevel = 0.0f;
     std::array<float, 64> scope {};
     int scopePos = 0;

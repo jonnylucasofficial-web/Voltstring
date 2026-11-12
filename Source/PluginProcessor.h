@@ -89,6 +89,26 @@ private:
     int retrigHold = 0;
     float lastAmp = 0.0f;
 
+    // noise gates: pre (guitar input) and post (final output)
+    struct Gate
+    {
+        float det = 0.0f, gain = 0.0f;
+        int hold = 0;
+        bool open = false;
+        void reset() { det = gain = 0.0f; hold = 0; open = false; }
+        float process (float level, float thr, float closeThr, float detRel, float atk, float rel, int holdLen)
+        {
+            det = juce::jmax (level, det * detRel);
+            if (det > thr) { open = true; hold = holdLen; }
+            else if (det < closeThr) { if (hold > 0) --hold; else open = false; }
+            const float t = open ? 1.0f : 0.0f;
+            gain += (t > gain ? atk : rel) * (t - gain);
+            return gain;
+        }
+    };
+    Gate preGate, postGate;
+    std::vector<float> preGainBuf;
+
     juce::Reverb reverb;
     juce::AudioBuffer<float> wetBuf;
     std::vector<float> gateBuf, synthMono;

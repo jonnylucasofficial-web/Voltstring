@@ -107,6 +107,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout VoltstringProcessor::createL
     p.push_back (std::make_unique<P> (juce::ParameterID { "decay", 1 }, "Decay", decR, 300.0f, ms));
     p.push_back (std::make_unique<P> (juce::ParameterID { "sustain", 1 }, "Sustain", R (0.0f, 1.0f), 0.7f, pct));
     p.push_back (std::make_unique<P> (juce::ParameterID { "release", 1 }, "Release", relR, 400.0f, ms));
+    R gRelR (5.0f, 1000.0f, 0.1f);  gRelR.setSkewForCentre (100.0f);
+    auto db = A().withLabel ("dB").withStringFromValueFunction ([] (float v, int) { return juce::String (v, 0) + " dB"; });
+    p.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "pregate", 1 }, "Pre Gate", false));
+    p.push_back (std::make_unique<P> (juce::ParameterID { "pre_thresh", 1 }, "Pre Thresh", R (-80.0f, -10.0f, 0.1f), -55.0f, db));
+    p.push_back (std::make_unique<P> (juce::ParameterID { "pre_release", 1 }, "Pre Release", gRelR, 60.0f, ms));
+    p.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "postgate", 1 }, "Post Gate", false));
+    p.push_back (std::make_unique<P> (juce::ParameterID { "post_thresh", 1 }, "Post Thresh", R (-80.0f, -10.0f, 0.1f), -60.0f, db));
+    p.push_back (std::make_unique<P> (juce::ParameterID { "post_release", 1 }, "Post Release", gRelR, 120.0f, ms));
     p.push_back (std::make_unique<P> (juce::ParameterID { "output", 1 }, "Output", R (-24.0f, 12.0f, 0.01f), 0.0f, unit ("dB", 1)));
 
     return { p.begin(), p.end() };
@@ -155,6 +163,10 @@ void VoltstringProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     outS.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (apvts.getRawParameterValue ("output")->load()));
     driveS.setCurrentAndTargetValue (apvts.getRawParameterValue ("drive")->load());
     verbS.setCurrentAndTargetValue (apvts.getRawParameterValue ("verb")->load());
+
+    preGate.reset();
+    postGate.reset();
+    preGainBuf.assign ((size_t) juce::jmax (1, samplesPerBlock), 1.0f);
 
     adsr.setSampleRate (sr);
     adsr.reset();
@@ -257,6 +269,7 @@ void VoltstringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         gateBuf.assign ((size_t) n, 0.0f);
         synthMono.assign ((size_t) n, 0.0f);
     }
+    if ((int) preGainBuf.size() < n) preGainBuf.assign ((size_t) n, 1.0f);
 
     // mono input for a stereo output: mirror it
     if (inCh == 1 && outCh == 2) buffer.copyFrom (1, 0, buffer, 0, 0, n);
@@ -295,6 +308,16 @@ void VoltstringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     const float slowCoef = coefFromMs (60.0f, sr);
     const int retrigSamples = (int) (0.06 * sr);
 
+    // gates
+    const bool preOn = param ("pregate") > 0.5f, postOn = param ("postgate") > 0.5f;
+    const float preThr = juce::Decibels::decibelsToGain (param ("pre_thresh"));
+    const float postThr = juce::Decibels::decibelsToGain (param ("post_thresh"));
+    const float hyst = juce::Decibels::decibelsToGain (-4.0f);           // close 4 dB below open
+    const float gateDetRel = std::exp (-1.0f / (0.010f * (float) sr));    // 10 ms peak detector
+    const float gateAtk = coefFromMs (0.5f, sr);
+    const float preRel = coefFromMs (param ("pre_release"), sr), postRel = coefFromMs (param ("post_release"), sr);
+    const int gateHold = (int) (0.02 * sr);
+
     mixS.setTargetValue (param ("mix"));
     outS.setTargetValue (juce::Decibels::decibelsToGain (param ("output")));
     driveS.setTargetValue (param ("drive"));
@@ -307,7 +330,15 @@ void VoltstringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
 
     for (int i = 0; i < n; ++i)
     {
-        const float mono = 0.5f * (inL[i] + inR[i]);
+        float mono = 0.5f * (inL[i] + inR[i]);
+
+        // pre gate on the guitar input (affects tracking, dynamics and the dry signal)
+        float preG = 1.0f;
+        if (preOn)
+            preG = preGate.process (juce::jmax (std::abs (inL[i]), std::abs (inR[i])), preThr, preThr * hyst,
+                                    gateDetRel, gateAtk, preRel, gateHold);
+        preGainBuf[(size_t) i] = preG;
+        mono *= preG;
 
         // pitch
         const float tracked = processPitchInput (mono);
@@ -421,13 +452,21 @@ void VoltstringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     {
         const float mix = mixS.getNextValue(), outG = outS.getNextValue();
         const float vAmt = verbS.getNextValue() * gateBuf[(size_t) i];
+        float outs[2] = { 0.0f, 0.0f };
+        float peak = 0.0f;
         for (int c = 0; c < outCh; ++c)
         {
             const float verb = wetBuf.getSample (c, i) * vAmt;
             const float wet = synthMono[(size_t) i] + verb;
-            const float dry = buffer.getSample (c, i);
-            buffer.setSample (c, i, (dry * (1.0f - mix) + wet * mix) * outG);
+            const float dry = buffer.getSample (c, i) * preGainBuf[(size_t) i];
+            outs[c] = (dry * (1.0f - mix) + wet * mix) * outG;
+            peak = juce::jmax (peak, std::abs (outs[c]));
         }
+        // post gate on the final output
+        const float postG = postOn ? postGate.process (peak, postThr, postThr * hyst, gateDetRel, gateAtk, postRel, gateHold)
+                                   : 1.0f;
+        for (int c = 0; c < outCh; ++c)
+            buffer.setSample (c, i, outs[c] * postG);
     }
 
     displayNote.store (lastAmp > 0.02f && trackedMidi > 0.0f ? trackedMidi + transpose : -1.0f);
