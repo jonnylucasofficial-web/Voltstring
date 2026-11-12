@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Voltstring VERSION 1.3.0)
+project(Voltstring VERSION 1.4.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")

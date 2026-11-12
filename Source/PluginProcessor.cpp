@@ -8,17 +8,78 @@ namespace
 {
     constexpr double twoPi = juce::MathConstants<double>::twoPi;
 
-    // Per-engine voicing: gains for
-    // saw, saw+detune, saw-detune, square, sub sine, sub square, fifth (saw), octave up (tri)
-    // plus envelope attack / release in ms.
-    struct Voicing { float g[8]; float atkMs, relMs; };
-    const Voicing voicings[] = {
-        { { 0.15f, 0.00f, 0.00f, 0.45f, 0.95f, 0.40f, 0.00f, 0.00f },   2.0f,  80.0f }, // SUB
-        { { 0.55f, 0.45f, 0.45f, 0.20f, 0.30f, 0.00f, 0.00f, 0.00f },   2.0f, 100.0f }, // ANALOG
-        { { 0.80f, 0.30f, 0.00f, 0.30f, 0.20f, 0.00f, 0.00f, 0.25f },   1.0f,  70.0f }, // LEAD
-        { { 0.35f, 0.50f, 0.50f, 0.00f, 0.20f, 0.00f, 0.00f, 0.30f }, 600.0f, 900.0f }, // PAD
-        { { 0.55f, 0.20f, 0.00f, 0.20f, 0.25f, 0.00f, 0.55f, 0.25f },   2.0f, 100.0f }, // FIFTHS
+    float polyBlepFwd (double t, double dt)
+    {
+        if (t < dt)       { t /= dt;           return (float) (t + t - t * t - 1.0); }
+        if (t > 1.0 - dt) { t = (t - 1.0) / dt; return (float) (t * t + t + t + 1.0); }
+        return 0.0f;
+    }
+
+    // Voice slots:
+    //  0 saw   1 saw+detune   2 saw-detune   3 square   4 sub sine (-1 oct)   5 sub square (-1 oct)
+    //  6 fifth (saw)   7 octave-up tri   8 PWM pulse   9 hard-sync saw   10 FM   11 wavefolder
+    // 12 vowel (formant saw)   13 breath noise   14 sine   15 ensemble saws   16 narrow pulse   17 triangle
+    // Each engine is a mix of voices plus a few character settings.
+    struct Voicing
+    {
+        float g[18];
+        float atkMs, relMs;
+        float vibCents, vibHz;   // vibrato that grows as the note sustains
+        float brass;             // brightness that opens with playing level (brass / reed)
+        float syncMax;           // hard-sync sweep amount
+        float fmRatio, fmIndex;  // FM modulator ratio and depth
+        float pwm;               // pulse width modulation depth
+        float narrowW;           // narrow pulse width
     };
+    //                       0     1     2     3     4     5     6     7     8     9    10    11    12    13    14    15    16    17
+    const Voicing voicings[] = {
+        { { .15f,   0,    0, .45f, .95f, .40f,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0 },   2,   80,  0, 0,  0,   0, 1, 0,   0, .125f }, // SUB
+        { { .55f, .45f, .45f, .20f, .30f,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0 },   2,  100,  0, 0,  0,   0, 1, 0,   0, .125f }, // ANALOG
+        { { .80f, .30f,    0, .30f, .20f,    0,    0, .25f,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0 },   1,   70,  0, 0,  0,   0, 1, 0,   0, .125f }, // LEAD
+        { { .35f, .50f, .50f,    0, .20f,    0,    0, .30f,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0 }, 600,  900,  0, 0,  0,   0, 1, 0,   0, .125f }, // PAD
+        { { .55f, .20f,    0, .20f, .25f,    0, .55f, .25f,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0 },   2,  100,  0, 0,  0,   0, 1, 0,   0, .125f }, // FIFTHS
+        { {    0,    0,    0,    0, .15f,    0,    0,    0,    0,    0,    0,    0,    0,    0, .90f,    0,    0,    0 },   2,  100,  0, 0,  0,   0, 1, 0,   0, .125f }, // SINE
+        { {    0,    0,    0, .75f,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0 },   2,  100,  0, 0,  0,   0, 1, 0,   0, .125f }, // SQUARE
+        { {    0,    0,    0,    0, .10f,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0, 1.0f },   2,  100,  0, 0,  0,   0, 1, 0,   0, .125f }, // TRIANGLE
+        { { .85f,   0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0 },   2,  100,  0, 0,  0,   0, 1, 0,   0, .125f }, // SAW
+        { {    0,    0,    0,    0, .20f,    0,    0,    0, .80f,    0,    0,    0,    0,    0,    0,    0,    0,    0 },   2,  120,  0, 0,  0,   0, 1, 0, .4f, .125f }, // PWM
+        { {    0,    0,    0,    0, .20f,    0,    0,    0,    0, .80f,    0,    0,    0,    0,    0,    0,    0,    0 },   2,  100,  0, 0,  0,   4, 1, 0,   0, .125f }, // SYNC
+        { {    0,    0,    0,    0,    0,    0,    0,    0,    0,    0, .85f,    0,    0,    0,    0,    0,    0,    0 },   1,  700,  0, 0,  0,   0, 3.5f, 4,  0, .125f }, // FM BELL
+        { {    0,    0,    0,    0, .15f,    0,    0,    0,    0,    0,    0, .85f,    0,    0,    0,    0,    0,    0 },   2,  100,  0, 0,  0,   0, 1, 0,   0, .125f }, // FOLD
+        { {    0,    0,    0,    0, .10f,    0,    0,    0,    0,    0,    0,    0, 1.2f,    0,    0,    0,    0,    0 },   5,  120,  6, 5.5f, 0, 0, 1, 0,   0, .125f }, // VOWEL
+        { { .55f, .40f, .35f,    0,    0,    0,    0,    0, .25f,    0,    0,    0,    0,    0,    0,    0,    0,    0 },  35,  140,  7, 5.2f, 1, 0, 1, 0, .1f, .125f }, // BRASS
+        { { .30f, .35f, .35f,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0, .55f,    0,    0 }, 220,  650,  9, 5.6f, 0, 0, 1, 0,   0, .125f }, // STRINGS
+        { {    0,    0,    0,    0,    0,    0,    0, .08f,    0,    0,    0,    0,    0, .90f, .70f,    0,    0,    0 },  70,  220, 14, 5.0f, 0, 0, 1, 0,   0, .125f }, // WIND
+        { {    0,    0,    0, .20f, .10f,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0, .65f,    0 },  15,  120,  8, 5.5f, .6f, 0, 1, 0,  0, .2f   }, // REED
+        { {    0,    0,    0, .45f,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0, .45f,    0 },   1,   40,  0, 0,  0,   0, 1, 0,   0, .125f }, // CHIP
+        { {    0,    0,    0,    0,    0,    0,    0,    0,    0, .45f, .50f, .30f,    0,    0,    0,    0,    0,    0 },   1,  150,  0, 0,  0,   6, 1.414f, 7, 0, .125f }, // GLITCH
+        { {    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0, .90f,    0, .35f,    0,    0 }, 400, 1300,  0, 0,  0,   0, 1, 0,   0, .125f }, // NOISE WASH
+        { {    0,    0,    0,    0, .45f,    0,    0, .35f,    0,    0,    0,    0,    0,    0, .55f,    0,    0,    0 },   3,   60,  0, 0,  0,   0, 1, 0,   0, .125f }, // ORGAN
+    };
+    constexpr int numEngines = (int) (sizeof (voicings) / sizeof (voicings[0]));
+
+    // small state-variable filter used for formants, breath and the brass bloom
+    inline void svfSet (float& a1, float& a2, float& a3, float k, double fc, double rate)
+    {
+        const float g = (float) std::tan (juce::MathConstants<double>::pi * juce::jlimit (20.0, rate * 0.45, fc) / rate);
+        a1 = 1.0f / (1.0f + g * (g + k)); a2 = g * a1; a3 = g * a2;
+    }
+    inline float svfBand (float x, float& ic1, float& ic2, float a1, float a2, float a3, float k)
+    {
+        const float v3 = x - ic2;
+        const float v1 = a1 * ic1 + a2 * v3;
+        const float v2 = ic2 + a2 * ic1 + a3 * v3;
+        ic1 = 2.0f * v1 - ic1; ic2 = 2.0f * v2 - ic2;
+        return v1 * k;   // normalised band-pass
+    }
+
+    inline float pulseOsc (double p, double dt, double w)
+    {
+        float v = p < w ? 1.0f : -1.0f;
+        double p2 = p - w; if (p2 < 0.0) p2 += 1.0;
+        v += polyBlepFwd (p, dt) - polyBlepFwd (p2, dt);
+        return v - (float) (2.0 * w - 1.0);
+    }
 
     inline float polyBlep (double t, double dt)
     {
@@ -48,7 +109,8 @@ namespace
     }
 }
 
-const juce::StringArray VoltstringProcessor::engineNames { "Sub", "Analog", "Lead", "Pad", "Fifths" };
+const juce::StringArray VoltstringProcessor::engineNames { "Sub", "Analog", "Lead", "Pad", "Fifths", "Sine", "Square", "Triangle",
+    "Saw", "PWM", "Sync", "FM Bell", "Fold", "Vowel", "Brass", "Strings", "Wind", "Reed", "Chip", "Glitch", "Noise Wash", "Organ" };
 
 VoltstringProcessor::VoltstringProcessor()
     : AudioProcessor (BusesProperties()
@@ -150,6 +212,10 @@ void VoltstringProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 
     phase = {};
     ringPhase = 0.0;
+    syncSlave = fmMod = ens2 = vibPhase = pwmPhase = 0.0;
+    for (int i = 0; i < 2; ++i) vIc1[i] = vIc2[i] = 0.0f;
+    bIc1 = bIc2 = brassLp1 = brassLp2 = 0.0f;
+    colourCount = 0;
     rmsState = env = gate = 0.0f;
     ic1 = ic2 = 0.0f;
     filterCount = 0;
@@ -275,7 +341,7 @@ void VoltstringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     if (inCh == 1 && outCh == 2) buffer.copyFrom (1, 0, buffer, 0, 0, n);
 
     auto param = [this] (const char* id) { return apvts.getRawParameterValue (id)->load(); };
-    const int engine = juce::jlimit (0, 4, (int) param ("engine"));
+    const int engine = juce::jlimit (0, numEngines - 1, (int) param ("engine"));
     const auto& V = voicings[engine];
     if (engine != lastEngine)
     {
@@ -323,7 +389,7 @@ void VoltstringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     driveS.setTargetValue (param ("drive"));
     verbS.setTargetValue (param ("verb"));
 
-    static constexpr double mult[numVoices] = { 1.0, 0.0, 0.0, 1.0, 0.5, 0.5, 1.4983070768766815, 2.0 };
+    const double ensRatio = std::exp2 (juce::jmax (8.0f, param ("detune")) * 2.0f / 1200.0f);
 
     const float* inL = buffer.getReadPointer (0);
     const float* inR = buffer.getReadPointer (outCh > 1 ? 1 : 0);
@@ -378,28 +444,98 @@ void VoltstringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         gate += (gTarget > gate ? gAtk : gRel) * (gTarget - gate);
 
         // oscillators
-        const double f = 440.0 * std::exp2 ((curMidi - 69.0) / 12.0);
+        vibPhase += V.vibHz / sr; if (vibPhase >= 1.0) vibPhase -= 1.0;
+        pwmPhase += 0.6 / sr;     if (pwmPhase >= 1.0) pwmPhase -= 1.0;
+        const double vib = V.vibCents > 0.0f ? std::exp2 (V.vibCents * amp / 1200.0 * std::sin (twoPi * vibPhase)) : 1.0;
+        const double f = 440.0 * std::exp2 ((curMidi - 69.0) / 12.0) * vib;
+        const double dt0 = juce::jmin (0.45, f / sr);
+
+        if (colourCount-- <= 0)
+        {
+            colourCount = 15;
+            svfSet (vA1[0], vA2[0], vA3[0], 0.15f, 300.0 + 430.0 * amp, sr);      // vowel F1: oo -> ah
+            svfSet (vA1[1], vA2[1], vA3[1], 0.12f, 870.0 + 400.0 * amp, sr);      // vowel F2
+            svfSet (bA1, bA2, bA3, 0.18f, f, sr);                                  // breath, tuned to the note
+            brassCoef = coefFromMs (1000.0f / (float) (twoPi * juce::jmin (sr * 0.45, f * (1.2 + 10.0 * amp * V.brass))), sr);
+        }
+
         float osc = 0.0f;
         for (int v = 0; v < numVoices; ++v)
         {
             const float g = voiceGain[(size_t) v].getNextValue();
-            double fv = v == 1 ? f * detRatio : v == 2 ? f / detRatio : f * mult[v];
-            const double dt = juce::jmin (0.45, fv / sr);
             double& p = phase[(size_t) v];
+            double dt = dt0;
+            switch (v)
+            {
+                case 1:  dt = juce::jmin (0.45, f * detRatio / sr); break;
+                case 2:  dt = f / detRatio / sr; break;
+                case 4: case 5: dt = dt0 * 0.5; break;
+                case 6:  dt = juce::jmin (0.45, dt0 * 1.4983070768766815); break;
+                case 7:  dt = juce::jmin (0.45, dt0 * 2.0); break;
+                case 15: dt = juce::jmin (0.45, f * ensRatio / sr); break;
+                default: break;
+            }
+
             if (g > 1.0e-4f)
             {
-                float s = 0.0f;
+                float sm = 0.0f;
                 switch (v)
                 {
-                    case 0: case 1: case 2: case 6: s = sawOsc (p, dt); break;
-                    case 3: case 5:                 s = squareOsc (p, dt); break;
-                    case 4:                         s = sineOsc (p); break;
-                    default:                        s = triOsc (p); break;
+                    case 0: case 1: case 2: case 6: sm = sawOsc (p, dt); break;
+                    case 3: case 5:   sm = squareOsc (p, dt); break;
+                    case 4: case 14:  sm = sineOsc (p); break;
+                    case 7: case 17:  sm = triOsc (p); break;
+                    case 8:  sm = pulseOsc (p, dt, 0.5 + V.pwm * 0.45 * std::sin (twoPi * pwmPhase)); break;
+                    case 9:  sm = (float) (2.0 * syncSlave - 1.0); break;                     // hard sync
+                    case 10:                                                                      // FM
+                    {
+                        const double idx = V.fmIndex * (0.3 + 0.7 * amp);
+                        sm = (float) std::sin (twoPi * p + idx * std::sin (twoPi * fmMod));
+                        break;
+                    }
+                    case 11: sm = (float) std::sin (std::sin (twoPi * p) * (1.0 + 5.0 * amp)); break;   // wavefolder
+                    case 12:                                                                      // vowel
+                    {
+                        const float src = sawOsc (p, dt);
+                        sm = 2.5f * (svfBand (src, vIc1[0], vIc2[0], vA1[0], vA2[0], vA3[0], 0.15f)
+                                   + 0.7f * svfBand (src, vIc1[1], vIc2[1], vA1[1], vA2[1], vA3[1], 0.12f));
+                        break;
+                    }
+                    case 13:                                                                      // breath
+                    {
+                        const float w = noise.nextFloat() * 2.0f - 1.0f;
+                        sm = 2.2f * svfBand (w, bIc1, bIc2, bA1, bA2, bA3, 0.18f) + 0.08f * w;
+                        break;
+                    }
+                    case 15: sm = 0.6f * (sawOsc (p, dt) + sawOsc (ens2, juce::jmin (0.45, f / ensRatio / sr))); break;
+                    case 16: sm = pulseOsc (p, dt, V.narrowW); break;
+                    default: break;
                 }
-                osc += g * s;
+                osc += g * sm;
             }
+
+            // advance phases (sync slave, FM modulator and 2nd ensemble saw ride along)
+            if (v == 9)
+            {
+                syncSlave += dt * (1.0 + (V.syncMax - 1.0) * amp);
+                if (syncSlave >= 1.0) syncSlave -= std::floor (syncSlave);
+            }
+            if (v == 10) { fmMod += dt * V.fmRatio; if (fmMod >= 1.0) fmMod -= std::floor (fmMod); }
+            if (v == 15) { ens2 += juce::jmin (0.45, f / ensRatio / sr); if (ens2 >= 1.0) ens2 -= 1.0; }
             p += dt;
-            if (p >= 1.0) p -= 1.0;
+            if (p >= 1.0)
+            {
+                p -= 1.0;
+                if (v == 9) syncSlave = p * (1.0 + (V.syncMax - 1.0) * amp);   // master wrapped: reset slave
+            }
+        }
+
+        // brass / reed bloom: brighter the harder you play
+        if (V.brass > 0.0f)
+        {
+            brassLp1 += brassCoef * (osc - brassLp1);
+            brassLp2 += brassCoef * (brassLp1 - brassLp2);
+            osc = osc * (1.0f - V.brass) + brassLp2 * V.brass * 1.4f;
         }
         float y = osc * 0.4f;
 

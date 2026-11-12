@@ -88,6 +88,11 @@ void VoltstringLook::drawButtonBackground (juce::Graphics& g, juce::Button& b, c
     g.drawRoundedRectangle (r, 6.0f, 1.0f);
 }
 
+juce::Font VoltstringLook::getTextButtonFont (juce::TextButton&, int buttonHeight)
+{
+    return juce::Font (juce::FontOptions (juce::jmin (13.0f, (float) buttonHeight * 0.5f), juce::Font::bold));
+}
+
 VoltstringEditor::VoltstringEditor (VoltstringProcessor& p) : AudioProcessorEditor (&p), proc (p)
 {
     setLookAndFeel (&look);
@@ -110,7 +115,7 @@ VoltstringEditor::VoltstringEditor (VoltstringProcessor& p) : AudioProcessorEdit
         knobs.push_back (std::move (k));
     }
 
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < (int) engineButtons.size(); ++i)
     {
         auto& b = engineButtons[(size_t) i];
         b.setButtonText (VoltstringProcessor::engineNames[i].toUpperCase());
@@ -178,7 +183,7 @@ VoltstringEditor::VoltstringEditor (VoltstringProcessor& p) : AudioProcessorEdit
     addAndMakeVisible (nextButton);
     refreshPresetBox();
 
-    setSize (780, 740);
+    setSize (820, 770);
     startTimerHz (30);
 }
 
@@ -194,7 +199,7 @@ void VoltstringEditor::timerCallback()
     if (presetBox.getSelectedId() != proc.getCurrentProgram() + 1)
         refreshPresetBox();
     const int engine = (int) proc.apvts.getRawParameterValue ("engine")->load();
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < (int) engineButtons.size(); ++i)
         engineButtons[(size_t) i].setToggleState (i == engine, juce::dontSendNotification);
 
     const bool envOn = envButton.getToggleState();
@@ -258,7 +263,7 @@ void VoltstringEditor::paint (juce::Graphics& g)
     g.strokePath (pth, juce::PathStrokeType (2.0f));
 
     // section panels
-    auto body = getLocalBounds().withTrimmedTop (120).reduced (14, 8);
+    auto body = getLocalBounds().withTrimmedTop (146).reduced (14, 8);
     const int rh = body.getHeight() / 4;
     auto row1 = body.removeFromTop (rh).reduced (0, 4);
     auto row2 = body.removeFromTop (rh).reduced (0, 4);
@@ -357,12 +362,13 @@ void VoltstringEditor::resized()
     bar.removeFromRight (6);
     presetBox.setBounds (bar);
 
-    auto engineRow = juce::Rectangle<int> (24, 80, getWidth() - 48, 30);
-    const int bw = engineRow.getWidth() / 5;
-    for (auto& b : engineButtons)
-        b.setBounds (engineRow.removeFromLeft (bw).reduced (3, 0));
+    // engines: two rows of 11
+    const int perRow = 11;
+    const int bw = (getWidth() - 48) / perRow;
+    for (int i = 0; i < (int) engineButtons.size(); ++i)
+        engineButtons[(size_t) i].setBounds (24 + (i % perRow) * bw, 78 + (i / perRow) * 30, bw - 4, 26);
 
-    auto body = getLocalBounds().withTrimmedTop (120).reduced (14, 8);
+    auto body = getLocalBounds().withTrimmedTop (146).reduced (14, 8);
     const int rh = body.getHeight() / 4;
     auto row1 = body.removeFromTop (rh).reduced (6, 10);
     auto row2 = body.removeFromTop (rh).reduced (6, 10);

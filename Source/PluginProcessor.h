@@ -50,7 +50,7 @@ public:
     std::atomic<bool> preGateOpen { true }, postGateOpen { true };
 
 private:
-    static constexpr int numVoices = 8;
+    static constexpr int numVoices = 18;
     int currentPreset = 0;
 
     void analyse();                 // runs YIN on the analysis buffer
@@ -73,6 +73,12 @@ private:
     std::array<double, numVoices> phase {};
     std::array<juce::SmoothedValue<float>, numVoices> voiceGain;
     double ringPhase = 0.0;
+    double syncSlave = 0.0, fmMod = 0.0, ens2 = 0.0, vibPhase = 0.0, pwmPhase = 0.0;
+    float vIc1[2] {}, vIc2[2] {}, vA1[2] { 1, 1 }, vA2[2] {}, vA3[2] {};   // vowel formants
+    float bIc1 = 0, bIc2 = 0, bA1 = 1, bA2 = 0, bA3 = 0;                     // breath band-pass
+    float brassLp1 = 0, brassLp2 = 0, brassCoef = 1.0f;
+    int colourCount = 0;
+    juce::Random noise;
 
     // envelope follower
     float rmsState = 0.0f, env = 0.0f, gate = 0.0f;

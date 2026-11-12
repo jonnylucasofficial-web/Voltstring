@@ -10,6 +10,7 @@ public:
                            float start, float end, juce::Slider&) override;
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&,
                                bool highlighted, bool down) override;
+    juce::Font getTextButtonFont (juce::TextButton&, int buttonHeight) override;
 };
 
 class VoltstringEditor : public juce::AudioProcessorEditor, private juce::Timer
@@ -36,7 +37,7 @@ private:
     juce::ComboBox presetBox;
     juce::TextButton prevButton { "<" }, nextButton { ">" };
     std::vector<std::unique_ptr<Knob>> knobs;
-    std::array<juce::TextButton, 5> engineButtons;
+    std::array<juce::TextButton, 22> engineButtons;
     juce::TextButton envButton { "OFF" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> envAttachment;
     juce::TextButton preButton { "OFF" }, postButton { "OFF" };
