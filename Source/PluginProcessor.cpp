@@ -103,10 +103,6 @@ namespace
         return ms <= 0.0f ? 1.0f : (float) (1.0 - std::exp (-1.0 / (ms * 0.001 * rate)));
     }
 
-    float median3 (float a, float b, float c)
-    {
-        return juce::jmax (juce::jmin (a, b), juce::jmin (juce::jmax (a, b), c));
-    }
 }
 
 const juce::StringArray VoltstringProcessor::engineNames { "Sub", "Analog", "Lead", "Pad", "Fifths", "Sine", "Square", "Triangle",
@@ -200,15 +196,22 @@ void VoltstringProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     anaRate = sr / decim;
     tauMin = (int) (anaRate / 1500.0);
     tauMax = (int) (anaRate / 55.0);          // down to A1 (covers drop tunings)
-    yinW = (int) (anaRate * 0.022);
-    hop = juce::jmax (32, yinW / 4);
-    anaBuf.assign ((size_t) (yinW + tauMax + 2), 0.0f);
+    yinWMax = (int) (anaRate * 0.020);        // long window for low notes
+    yinWMin = (int) (anaRate * 0.005);        // short window floor for high notes
+    yinW = yinWMax;
+    hop = 64;                                 // re-analyse every ~3 ms
+    anaBuf.assign ((size_t) (yinWMax + tauMax + 2), 0.0f);
     yinD.assign ((size_t) (tauMax + 2), 0.0f);
-    preCoef = coefFromMs (1000.0f / (float) (twoPi * 4000.0), sr);   // ~4 kHz one-pole
-    pre1 = pre2 = 0.0f;
+    preCoef = coefFromMs (1000.0f / (float) (twoPi * 4000.0), sr);   // ~4 kHz anti-alias
+    preCoef2 = coefFromMs (1000.0f / (float) (twoPi * 1300.0), sr);  // tame upper harmonics (fewer octave errors)
+    pre1 = pre2 = pre3 = 0.0f;
     decimCount = hopCount = 0;
-    trackedMidi = -1.0f;
-    histN = 0;
+    trackedMidi = pendingMidi = -1.0f;
+    pendingCount = 0;
+    lastPeriod = 0.0;
+    staleNote = snapPitch = true;
+    silenceSamples = 0;
+    validGain = 0.0f;
 
     phase = {};
     ringPhase = 0.0;
@@ -256,13 +259,14 @@ float VoltstringProcessor::processPitchInput (float x)
     // two one-pole lowpasses as an anti-alias filter, then decimate
     pre1 += preCoef * (x - pre1);
     pre2 += preCoef * (pre1 - pre2);
+    pre3 += preCoef2 * (pre2 - pre3);
     if (++decimCount < decim) return trackedMidi;
     decimCount = 0;
 
     const int N = (int) anaBuf.size();
     if (hopCount == 0)
         std::memmove (anaBuf.data(), anaBuf.data() + hop, sizeof (float) * (size_t) (N - hop));
-    anaBuf[(size_t) (N - hop + hopCount)] = pre2;
+    anaBuf[(size_t) (N - hop + hopCount)] = pre3;
     if (++hopCount >= hop)
     {
         hopCount = 0;
@@ -271,54 +275,103 @@ float VoltstringProcessor::processPitchInput (float x)
     return trackedMidi;
 }
 
-void VoltstringProcessor::analyse()
+// YIN on the NEWEST W samples (compared against older ones), so a new note is heard as soon as possible.
+bool VoltstringProcessor::runYin (int W, double& period, float& confidence)
 {
-    const float* x = anaBuf.data();
+    const int N = (int) anaBuf.size();
+    const int maxTau = juce::jmin (tauMax, N - W - 1);
+    const float* y = anaBuf.data() + (N - W);
 
     double energy = 0.0;
-    for (int j = 0; j < yinW; ++j) energy += (double) x[j] * x[j];
-    if (energy < 1.0e-7 * yinW) return;    // silence: hold the last note
+    for (int j = 0; j < W; ++j) energy += (double) y[j] * y[j];
+    if (energy < 1.0e-7 * W) return false;
 
-    // YIN difference function + cumulative mean normalisation
     yinD[0] = 1.0f;
     double running = 0.0;
-    for (int tau = 1; tau <= tauMax; ++tau)
+    for (int tau = 1; tau <= maxTau; ++tau)
     {
         double d = 0.0;
-        const float* y = x + tau;
-        for (int j = 0; j < yinW; ++j)
+        const float* z = y - tau;
+        for (int j = 0; j < W; ++j)
         {
-            const float diff = x[j] - y[j];
+            const float diff = y[j] - z[j];
             d += (double) diff * diff;
         }
         running += d;
         yinD[(size_t) tau] = running > 0.0 ? (float) (d * tau / running) : 1.0f;
     }
 
+    // first dip under the threshold (the shortest plausible period)
     int best = -1;
-    for (int tau = juce::jmax (2, tauMin); tau < tauMax; ++tau)
+    for (int tau = juce::jmax (2, tauMin); tau < maxTau; ++tau)
     {
-        if (yinD[(size_t) tau] < 0.15f)
+        if (yinD[(size_t) tau] < 0.12f)
         {
-            while (tau + 1 < tauMax && yinD[(size_t) tau + 1] < yinD[(size_t) tau]) ++tau;
+            while (tau + 1 < maxTau && yinD[(size_t) tau + 1] < yinD[(size_t) tau]) ++tau;
             best = tau;
             break;
         }
     }
-    if (best < 0) return;   // not confident: keep the last note
+    if (best < 0) return false;
 
-    // parabolic interpolation for sub-sample period
     const float a = yinD[(size_t) best - 1], b = yinD[(size_t) best], c = yinD[(size_t) best + 1];
     const float denom = a - 2.0f * b + c;
     const float shift = std::abs (denom) > 1.0e-9f ? 0.5f * (a - c) / denom : 0.0f;
-    const double period = best + juce::jlimit (-1.0f, 1.0f, shift);
+    period = best + juce::jlimit (-1.0f, 1.0f, shift);
+    confidence = b;
+    return true;
+}
+
+void VoltstringProcessor::analyse()
+{
+    double period = 0.0;
+    float conf = 1.0f;
+    bool ok = false;
+
+    // fast path: a short window sized to the current note (high notes respond very quickly)
+    if (lastPeriod > 0.0)
+    {
+        const int W = juce::jlimit (yinWMin, yinWMax, (int) (lastPeriod * 2.2));
+        ok = runYin (W, period, conf) && period < W * 0.8;
+    }
+    // fall back to the long window (low notes, or a big jump down)
+    if (! ok)
+        ok = runYin (yinWMax, period, conf);
+    if (! ok) return;   // not confident: keep the last note
+
     const double f = anaRate / period;
     if (f < 50.0 || f > 1600.0) return;
+    lastPeriod = period;
+    acceptPitch ((float) (69.0 + 12.0 * std::log2 (f / 440.0)));
+}
 
-    const float midi = (float) (69.0 + 12.0 * std::log2 (f / 440.0));
-    hist[(size_t) (histN % 3)] = midi;
-    ++histN;
-    trackedMidi = histN < 3 ? midi : median3 (hist[0], hist[1], hist[2]);
+// Octave jumps must be confirmed by consecutive analyses; any other note change is taken at once.
+void VoltstringProcessor::acceptPitch (float midi)
+{
+    if (trackedMidi < 0.0f || staleNote)
+    {
+        trackedMidi = midi;
+        pendingCount = 0;
+        staleNote = false;
+        return;
+    }
+    const float jump = std::abs (midi - trackedMidi);
+    const bool octaveJump = std::abs (jump - 12.0f) < 0.7f || std::abs (jump - 24.0f) < 0.7f;
+    if (! octaveJump)
+    {
+        trackedMidi = midi;
+        pendingCount = 0;
+        return;
+    }
+    if (pendingCount > 0 && std::abs (midi - pendingMidi) < 0.7f)
+    {
+        if (++pendingCount >= 3) { trackedMidi = midi; pendingCount = 0; }
+    }
+    else
+    {
+        pendingMidi = midi;
+        pendingCount = 1;
+    }
 }
 
 void VoltstringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -362,7 +415,9 @@ void VoltstringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     const float crush = param ("crush"), ring = param ("ring");
     const double ringInc = param ("ringhz") / sr;
     const float atk = coefFromMs (V.atkMs, sr), rel = coefFromMs (V.relMs, sr);
-    const float rmsCoef = coefFromMs (8.0f, sr);
+    const float rmsCoef = coefFromMs (5.0f, sr);
+    const int silenceLimit = (int) (0.04 * sr);
+    const float validCoef = coefFromMs (1.5f, sr);
     const float gAtk = coefFromMs (1.0f, sr), gRel = coefFromMs (param ("vgate"), sr);
     const float crushHoldLen = 1.0f + crush * crush * 20.0f;
     const float crushSteps = std::exp2 (15.0f - crush * 12.0f);
@@ -410,13 +465,24 @@ void VoltstringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
 
         // pitch
         const float tracked = processPitchInput (mono);
-        if (tracked > 0.0f)
-            curMidi += glideCoef * (tracked + transpose - curMidi);
+        if (tracked > 0.0f && ! staleNote)
+        {
+            if (snapPitch) { curMidi = tracked + transpose; snapPitch = false; }   // new note: no swoop from the last one
+            else           curMidi += glideCoef * (tracked + transpose - curMidi);
+        }
 
         // dynamics
         rmsState += rmsCoef * (mono * mono - rmsState);
         const float lvl = juce::jlimit (0.0f, 1.0f, std::sqrt (rmsState) * sens - thresh);
         env += (lvl > env ? atk : rel) * (lvl - env);
+
+        // after ~40 ms of silence the next note is a fresh note: hold the synth until its pitch is known
+        if (lvl <= 0.0f && env < 0.01f)
+        {
+            if (++silenceSamples > silenceLimit && ! staleNote) { staleNote = true; snapPitch = true; }
+        }
+        else silenceSamples = 0;
+        validGain += validCoef * ((staleNote ? 0.0f : 1.0f) - validGain);
 
         // amplitude: either the picking follower, or the ADSR triggered by picking
         float amp = env;
@@ -440,6 +506,7 @@ void VoltstringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
             amp = adsr.getNextSample();
         }
 
+        amp *= validGain;
         const float gTarget = amp > 0.02f ? 1.0f : 0.0f;
         gate += (gTarget > gate ? gAtk : gRel) * (gTarget - gate);
 

@@ -54,6 +54,8 @@ private:
     int currentPreset = 0;
 
     void analyse();                 // runs YIN on the analysis buffer
+    bool runYin (int W, double& period, float& confidence);
+    void acceptPitch (float midi);
     float processPitchInput (float monoIn);
 
     double sr = 44100.0;
@@ -63,10 +65,16 @@ private:
     double anaRate = 22050.0;
     int yinW = 512, tauMin = 20, tauMax = 400, hop = 128, hopCount = 0;
     std::vector<float> anaBuf, yinD;
-    float pre1 = 0.0f, pre2 = 0.0f, preCoef = 0.3f;
-    float trackedMidi = -1.0f;      // latest confident detection (median of last 3)
-    std::array<float, 3> hist {};
-    int histN = 0;
+    float pre1 = 0.0f, pre2 = 0.0f, preCoef = 0.3f;  // anti-alias
+    float trackedMidi = -1.0f;      // latest accepted detection
+    float pendingMidi = -1.0f;      // octave jump waiting for confirmation
+    int pendingCount = 0;
+    double lastPeriod = 0.0;        // in analysis samples
+    int yinWMax = 512, yinWMin = 128;
+    float pre3 = 0.0f, preCoef2 = 0.3f;
+    bool staleNote = true, snapPitch = true;   // new note: wait for its pitch, then jump straight to it
+    int silenceSamples = 0;
+    float validGain = 0.0f;
 
     // --- synth ---
     float curMidi = 52.0f;          // glided pitch
