@@ -13,6 +13,8 @@ struct VoltstringPreset
     // engine (0 Sub,1 Analog,2 Lead,3 Pad,4 Fifths), transpose st, glide ms, detune ct, sens, thresh,
     // cutoff Hz, env amt Hz, reso, drive, crush, ring, ring Hz, verb, verb gate ms, mix, output dB
     float v[numPresetParams];
+    // optional envelope: on (1/0), attack ms, decay ms, sustain 0..1, release ms. All zero = envelope off.
+    float e[5];
 };
 
 static const VoltstringPreset voltstringPresets[] = {
@@ -54,6 +56,15 @@ static const VoltstringPreset voltstringPresets[] = {
     { "FX",     "Metal Detector",    { 1,   0,  30, 25, 10, 0.02f, 2000, 4000, 0.60f,  4.0f, 0.20f, 0.60f,  140, 0.30f,  400, 1.00f, -4.0f } },
     { "FX",     "Gated 80s Snap",    { 1,   0,  20, 14, 12, 0.03f, 1500, 5000, 0.40f,  3.0f, 0.00f, 0.00f,  220, 0.90f,  120, 0.90f, -3.0f } },
     { "FX",     "Tape Wobble Lo-Fi", { 3,   0,  90, 40,  8, 0.02f,  900, 1500, 0.20f,  2.0f, 0.45f, 0.00f,  220, 0.40f,  900, 0.80f, -1.0f } },
+
+    // ---- Envelope (ADSR on) ----
+    { "Envelope", "Pluck Keys",      { 1,  12,   0, 10, 10, 0.02f,  500, 5000, 0.35f,  1.5f, 0.00f, 0.00f,  220, 0.30f,  500, 0.90f, -2.0f }, { 1,    1,  280, 0.00f,  350 } },
+    { "Envelope", "Slow Bloom",      { 3,   0,  60, 18,  8, 0.02f, 1500, 2500, 0.20f,  1.5f, 0.00f, 0.00f,  220, 0.50f, 1400, 0.80f,  0.0f }, { 1, 1800,  800, 0.85f, 2500 } },
+    { "Envelope", "Brass Stab",      { 4,   0,  10,  8, 12, 0.03f,  450, 4500, 0.30f,  3.0f, 0.00f, 0.00f,  220, 0.25f,  250, 1.00f, -3.0f }, { 1,   25,  220, 0.45f,  180 } },
+    { "Envelope", "Sub Thump",       { 0, -12,   0,  0, 10, 0.03f,  150, 2500, 0.30f,  2.0f, 0.00f, 0.00f,  220, 0.00f,  250, 1.00f,  0.0f }, { 1,    1,  450, 0.20f,  200 } },
+    { "Envelope", "Reverse Swell",   { 1,   0,  20, 16,  8, 0.02f,  800, 3500, 0.40f,  2.0f, 0.00f, 0.00f,  220, 0.45f,  700, 0.90f, -1.0f }, { 1,  700,   50, 1.00f,   60 } },
+    { "Envelope", "Chip Arp Blip",   { 0,  12,   0,  0, 10, 0.02f, 5000, 2000, 0.10f,  1.5f, 0.70f, 0.00f,  220, 0.20f,  200, 1.00f, -3.0f }, { 1,    1,  120, 0.00f,   80 } },
+    { "Envelope", "Long Tail Lead",  { 2,   0,  60,  8, 10, 0.02f, 1300, 3500, 0.45f,  3.0f, 0.00f, 0.00f,  220, 0.35f,  900, 0.90f, -2.0f }, { 1,   10,  600, 0.70f, 3000 } },
 };
 
 static constexpr int numVoltstringPresets = (int) (sizeof (voltstringPresets) / sizeof (voltstringPresets[0]));

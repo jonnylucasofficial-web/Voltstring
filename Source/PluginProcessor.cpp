@@ -97,6 +97,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout VoltstringProcessor::createL
     p.push_back (std::make_unique<P> (juce::ParameterID { "verb", 1 }, "Verb", R (0.0f, 1.0f), 0.25f, pct));
     p.push_back (std::make_unique<P> (juce::ParameterID { "vgate", 1 }, "Verb Gate", gateR, 250.0f, unit ("ms", 0)));
     p.push_back (std::make_unique<P> (juce::ParameterID { "mix", 1 }, "Mix", R (0.0f, 1.0f), 0.9f, pct));
+    R atkR (0.5f, 5000.0f, 0.1f);  atkR.setSkewForCentre (60.0f);
+    R decR (1.0f, 5000.0f, 0.1f);  decR.setSkewForCentre (300.0f);
+    R relR (5.0f, 8000.0f, 0.1f);  relR.setSkewForCentre (400.0f);
+    auto ms = A().withLabel ("ms").withStringFromValueFunction ([] (float v, int)
+        { return v >= 1000.0f ? juce::String (v / 1000.0f, 2) + " s" : juce::String (v, v < 10.0f ? 1 : 0) + " ms"; });
+    p.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "adsr", 1 }, "Envelope", false));
+    p.push_back (std::make_unique<P> (juce::ParameterID { "attack", 1 }, "Attack", atkR, 5.0f, ms));
+    p.push_back (std::make_unique<P> (juce::ParameterID { "decay", 1 }, "Decay", decR, 300.0f, ms));
+    p.push_back (std::make_unique<P> (juce::ParameterID { "sustain", 1 }, "Sustain", R (0.0f, 1.0f), 0.7f, pct));
+    p.push_back (std::make_unique<P> (juce::ParameterID { "release", 1 }, "Release", relR, 400.0f, ms));
     p.push_back (std::make_unique<P> (juce::ParameterID { "output", 1 }, "Output", R (-24.0f, 12.0f, 0.01f), 0.0f, unit ("dB", 1)));
 
     return { p.begin(), p.end() };
@@ -145,6 +155,12 @@ void VoltstringProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     outS.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (apvts.getRawParameterValue ("output")->load()));
     driveS.setCurrentAndTargetValue (apvts.getRawParameterValue ("drive")->load());
     verbS.setCurrentAndTargetValue (apvts.getRawParameterValue ("verb")->load());
+
+    adsr.setSampleRate (sr);
+    adsr.reset();
+    adsrNoteOn = adsrWasOn = false;
+    slowLvl = 0.0f;
+    retrigHold = 0;
 
     reverb.setSampleRate (sr);
     juce::Reverb::Parameters rp;
@@ -272,6 +288,13 @@ void VoltstringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     const float crushHoldLen = 1.0f + crush * crush * 20.0f;
     const float crushSteps = std::exp2 (15.0f - crush * 12.0f);
 
+    const bool adsrOn = param ("adsr") > 0.5f;
+    if (adsrOn != adsrWasOn) { adsr.reset(); adsrNoteOn = false; adsrWasOn = adsrOn; }
+    adsr.setParameters ({ param ("attack") * 0.001f, param ("decay") * 0.001f,
+                          param ("sustain"), param ("release") * 0.001f });
+    const float slowCoef = coefFromMs (60.0f, sr);
+    const int retrigSamples = (int) (0.06 * sr);
+
     mixS.setTargetValue (param ("mix"));
     outS.setTargetValue (juce::Decibels::decibelsToGain (param ("output")));
     driveS.setTargetValue (param ("drive"));
@@ -295,7 +318,30 @@ void VoltstringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         rmsState += rmsCoef * (mono * mono - rmsState);
         const float lvl = juce::jlimit (0.0f, 1.0f, std::sqrt (rmsState) * sens - thresh);
         env += (lvl > env ? atk : rel) * (lvl - env);
-        const float gTarget = env > 0.02f ? 1.0f : 0.0f;
+
+        // amplitude: either the picking follower, or the ADSR triggered by picking
+        float amp = env;
+        if (adsrOn)
+        {
+            const float raw = std::sqrt (rmsState) * sens;
+            slowLvl += slowCoef * (raw - slowLvl);
+            if (retrigHold > 0) --retrigHold;
+            if (! adsrNoteOn && raw > thresh + 0.04f)
+            {
+                adsr.noteOn(); adsrNoteOn = true; retrigHold = retrigSamples;
+            }
+            else if (adsrNoteOn && retrigHold == 0 && raw > slowLvl * 1.8f + 0.03f)
+            {
+                adsr.noteOn(); retrigHold = retrigSamples;          // new pick: retrigger
+            }
+            else if (adsrNoteOn && raw < thresh + 0.015f)
+            {
+                adsr.noteOff(); adsrNoteOn = false;
+            }
+            amp = adsr.getNextSample();
+        }
+
+        const float gTarget = amp > 0.02f ? 1.0f : 0.0f;
         gate += (gTarget > gate ? gAtk : gRel) * (gTarget - gate);
 
         // oscillators
@@ -328,7 +374,7 @@ void VoltstringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         if (filterCount-- <= 0)
         {
             filterCount = 15;
-            const double fc = juce::jlimit (30.0, sr * 0.45, (double) (cutoff + env * envAmt));
+            const double fc = juce::jlimit (30.0, sr * 0.45, (double) (cutoff + amp * envAmt));
             const float g = (float) std::tan (juce::MathConstants<double>::pi * fc / sr);
             fA1 = 1.0f / (1.0f + g * (g + k));
             fA2 = g * fA1;
@@ -339,7 +385,7 @@ void VoltstringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         const float v2 = ic2 + fA2 * ic1 + fA3 * v3;
         ic1 = 2.0f * v1 - ic1;
         ic2 = 2.0f * v2 - ic2;
-        y = v2 * env;
+        y = v2 * amp;
 
         // drive
         y = std::tanh (y * driveS.getNextValue()) * 0.7f;
@@ -363,6 +409,7 @@ void VoltstringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         if (ringPhase >= 1.0) ringPhase -= 1.0;
 
         synthMono[(size_t) i] = y;
+        lastAmp = amp;
         gateBuf[(size_t) i] = gate;
         wetBuf.setSample (0, i, y);
         wetBuf.setSample (1, i, y);
@@ -383,8 +430,8 @@ void VoltstringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
         }
     }
 
-    displayNote.store (env > 0.02f && trackedMidi > 0.0f ? trackedMidi + transpose : -1.0f);
-    displayLevel.store (env);
+    displayNote.store (lastAmp > 0.02f && trackedMidi > 0.0f ? trackedMidi + transpose : -1.0f);
+    displayLevel.store (lastAmp);
 }
 
 int VoltstringProcessor::getNumPrograms() { return numVoltstringPresets; }
@@ -399,9 +446,17 @@ void VoltstringProcessor::setCurrentProgram (int index)
 {
     if (! juce::isPositiveAndBelow (index, numVoltstringPresets)) return;
     currentPreset = index;
+    const auto& pr = voltstringPresets[index];
     for (int i = 0; i < numPresetParams; ++i)
         if (auto* p = apvts.getParameter (presetParamIds[i]))
-            p->setValueNotifyingHost (p->convertTo0to1 (voltstringPresets[index].v[i]));
+            p->setValueNotifyingHost (p->convertTo0to1 (pr.v[i]));
+
+    // envelope: presets without one switch it off and leave the ADSR knobs where they are
+    static const char* envIds[] = { "adsr", "attack", "decay", "sustain", "release" };
+    const int envCount = pr.e[0] > 0.5f ? 5 : 1;
+    for (int i = 0; i < envCount; ++i)
+        if (auto* p = apvts.getParameter (envIds[i]))
+            p->setValueNotifyingHost (p->convertTo0to1 (pr.e[i]));
     apvts.state.setProperty ("preset", index, nullptr);
     updateHostDisplay (ChangeDetails().withProgramChanged (true));
 }

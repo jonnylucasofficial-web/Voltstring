@@ -82,6 +82,13 @@ private:
     // crush
     float crushHold = 0.0f, crushCounter = 0.0f;
 
+    // ADSR section: triggered by picking when enabled
+    juce::ADSR adsr;
+    bool adsrNoteOn = false, adsrWasOn = false;
+    float slowLvl = 0.0f;
+    int retrigHold = 0;
+    float lastAmp = 0.0f;
+
     juce::Reverb reverb;
     juce::AudioBuffer<float> wetBuf;
     std::vector<float> gateBuf, synthMono;

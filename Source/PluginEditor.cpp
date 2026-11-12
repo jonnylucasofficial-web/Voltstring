@@ -8,13 +8,15 @@ namespace colours
     const juce::Colour track  { 0xff2a3439 };
     const juce::Colour accent { 0xff1fc2b2 };   // teal
     const juce::Colour accent2{ 0xfff2a33a };   // amber (FX row)
+    const juce::Colour accent3{ 0xffb48cf0 };   // violet (envelope row)
     const juce::Colour text   { 0xffe6ecec };
     const juce::Colour dim    { 0xff86959a };
 }
 
 static const char* paramIds[] = { "transpose", "glide", "detune", "sens", "thresh", "cutoff", "envamt", "reso",
-                                  "drive", "crush", "ring", "ringhz", "verb", "vgate", "mix", "output" };
-static constexpr int numKnobs = 16;
+                                  "drive", "crush", "ring", "ringhz", "verb", "vgate", "mix", "output",
+                                  "attack", "decay", "sustain", "release" };
+static constexpr int numKnobs = 20;
 
 VoltstringLook::VoltstringLook()
 {
@@ -45,7 +47,8 @@ void VoltstringLook::drawRotarySlider (juce::Graphics& g, int x, int y, int w, i
     const float r = juce::jmin (b.getWidth(), b.getHeight()) * 0.5f;
     const auto c = b.getCentre();
     const float angle = start + pos * (end - start);
-    const auto col = s.getProperties().getWithDefault ("alt", false) ? colours::accent2 : colours::accent;
+    const auto col = s.getProperties().getWithDefault ("env", false) ? colours::accent3
+                   : s.getProperties().getWithDefault ("alt", false) ? colours::accent2 : colours::accent;
 
     juce::Path arcBg, arcVal;
     arcBg.addCentredArc (c.x, c.y, r - 3, r - 3, 0, start, end, true);
@@ -92,7 +95,8 @@ VoltstringEditor::VoltstringEditor (VoltstringProcessor& p) : AudioProcessorEdit
         auto* param = proc.apvts.getParameter (paramIds[i]);
         k->slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
         k->slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 90, 18);
-        if (i >= 8) k->slider.getProperties().set ("alt", true);
+        if (i >= 8 && i < 16) k->slider.getProperties().set ("alt", true);
+        if (i >= 16) k->slider.getProperties().set ("env", true);
         k->label.setText (param->getName (20).toUpperCase(), juce::dontSendNotification);
         k->label.setJustificationType (juce::Justification::centred);
         k->label.setFont (juce::FontOptions (12.0f, juce::Font::bold));
@@ -118,6 +122,13 @@ VoltstringEditor::VoltstringEditor (VoltstringProcessor& p) : AudioProcessorEdit
         };
         addAndMakeVisible (b);
     }
+
+    // envelope on/off
+    envButton.setClickingTogglesState (true);
+    envButton.onStateChange = [this] { envButton.setButtonText (envButton.getToggleState() ? "ON" : "OFF"); };
+    envAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "adsr", envButton);
+    envButton.setButtonText (envButton.getToggleState() ? "ON" : "OFF");
+    addAndMakeVisible (envButton);
 
     // preset browser, grouped by category
     juce::String lastCat;
@@ -151,7 +162,7 @@ VoltstringEditor::VoltstringEditor (VoltstringProcessor& p) : AudioProcessorEdit
     addAndMakeVisible (nextButton);
     refreshPresetBox();
 
-    setSize (780, 440);
+    setSize (780, 600);
     startTimerHz (30);
 }
 
@@ -170,11 +181,15 @@ void VoltstringEditor::timerCallback()
     for (int i = 0; i < 5; ++i)
         engineButtons[(size_t) i].setToggleState (i == engine, juce::dontSendNotification);
 
+    const bool envOn = envButton.getToggleState();
+    for (int i = 16; i < numKnobs; ++i)
+        knobs[(size_t) i]->slider.setAlpha (envOn ? 1.0f : 0.35f);
+
     shownNote = proc.displayNote.load();
     shownLevel = proc.displayLevel.load();
     scope[(size_t) scopePos] = shownLevel;
     scopePos = (scopePos + 1) % (int) scope.size();
-    repaint (0, 0, getWidth(), 120);
+    repaint();
 }
 
 void VoltstringEditor::paint (juce::Graphics& g)
@@ -219,11 +234,42 @@ void VoltstringEditor::paint (juce::Graphics& g)
 
     // section panels
     auto body = getLocalBounds().withTrimmedTop (120).reduced (14, 8);
-    auto row1 = body.removeFromTop (body.getHeight() / 2).reduced (0, 4);
-    auto row2 = body.reduced (0, 4);
+    const int rh = body.getHeight() / 3;
+    auto row1 = body.removeFromTop (rh).reduced (0, 4);
+    auto row2 = body.removeFromTop (rh).reduced (0, 4);
+    auto row3 = body.reduced (0, 4);
     g.setColour (colours::panel);
     g.fillRoundedRectangle (row1.toFloat(), 10.0f);
     g.fillRoundedRectangle (row2.toFloat(), 10.0f);
+    g.fillRoundedRectangle (row3.toFloat(), 10.0f);
+
+    // envelope section title + ADSR shape preview
+    auto title = row3.reduced (16, 10).removeFromLeft (row3.getWidth() / 4);
+    g.setColour (colours::accent3);
+    g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+    g.drawText ("ENVELOPE", title.removeFromTop (18), juce::Justification::left);
+    g.setColour (colours::dim);
+    g.setFont (juce::FontOptions (11.0f));
+    g.drawText ("triggered by each pick", title.removeFromTop (16), juce::Justification::left);
+
+    auto shape = juce::Rectangle<float> ((float) row3.getRight() - 200.0f, (float) row3.getY() + 18.0f,
+                                         180.0f, (float) row3.getHeight() - 36.0f);
+    const float a = proc.apvts.getRawParameterValue ("attack")->load();
+    const float d = proc.apvts.getRawParameterValue ("decay")->load();
+    const float su = proc.apvts.getRawParameterValue ("sustain")->load();
+    const float r = proc.apvts.getRawParameterValue ("release")->load();
+    auto seg = [] (float msv) { return std::sqrt (msv) + 2.0f; };   // compress long times
+    const float total = seg (a) + seg (d) + 18.0f + seg (r);
+    const float sx = shape.getWidth() / total;
+    juce::Path env;
+    float xx = shape.getX();
+    env.startNewSubPath (xx, shape.getBottom());
+    xx += seg (a) * sx;          env.lineTo (xx, shape.getY());
+    xx += seg (d) * sx;          env.lineTo (xx, shape.getBottom() - su * shape.getHeight());
+    xx += 18.0f * sx;            env.lineTo (xx, shape.getBottom() - su * shape.getHeight());
+    xx += seg (r) * sx;          env.lineTo (xx, shape.getBottom());
+    g.setColour (colours::accent3.withAlpha (envButton.getToggleState() ? 0.9f : 0.3f));
+    g.strokePath (env, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 }
 
 void VoltstringEditor::resized()
@@ -241,8 +287,10 @@ void VoltstringEditor::resized()
         b.setBounds (engineRow.removeFromLeft (bw).reduced (3, 0));
 
     auto body = getLocalBounds().withTrimmedTop (120).reduced (14, 8);
-    auto row1 = body.removeFromTop (body.getHeight() / 2).reduced (6, 10);
-    auto row2 = body.reduced (6, 10);
+    const int rh = body.getHeight() / 3;
+    auto row1 = body.removeFromTop (rh).reduced (6, 10);
+    auto row2 = body.removeFromTop (rh).reduced (6, 10);
+    auto row3 = body.reduced (6, 10);
 
     auto layoutRow = [this] (juce::Rectangle<int> row, int first)
     {
@@ -257,4 +305,17 @@ void VoltstringEditor::resized()
     };
     layoutRow (row1, 0);
     layoutRow (row2, 8);
+
+    // envelope row: title + ON/OFF on the left, four knobs, ADSR preview on the right
+    const int w = row1.getWidth() / 8;
+    auto left = row3.removeFromLeft (w * 2);
+    envButton.setBounds (left.withTrimmedTop (44).withHeight (28).withWidth (64).translated (10, 0));
+    row3.removeFromRight (200);
+    for (int i = 16; i < numKnobs; ++i)
+    {
+        auto cell = row3.removeFromLeft (w);
+        auto& k = *knobs[(size_t) i];
+        k.label.setBounds (cell.removeFromTop (16));
+        k.slider.setBounds (cell);
+    }
 }
