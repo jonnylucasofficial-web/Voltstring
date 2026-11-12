@@ -42,6 +42,7 @@ private:
     juce::TextButton preButton { "OFF" }, postButton { "OFF" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> preAttachment, postAttachment;
     float shownNote = -1.0f, shownLevel = 0.0f;
+    float preMeter = -90.0f, postMeter = -90.0f;   // smoothed for display
     std::array<float, 64> scope {};
     int scopePos = 0;
 

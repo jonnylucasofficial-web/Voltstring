@@ -46,6 +46,8 @@ public:
     // for the editor
     std::atomic<float> displayNote { -1.0f };   // MIDI note being played, -1 when nothing tracked
     std::atomic<float> displayLevel { 0.0f };   // 0..1 envelope
+    std::atomic<float> preMeterDb { -90.0f }, postMeterDb { -90.0f };   // peak level into each gate
+    std::atomic<bool> preGateOpen { true }, postGateOpen { true };
 
 private:
     static constexpr int numVoices = 8;

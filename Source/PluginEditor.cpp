@@ -205,6 +205,11 @@ void VoltstringEditor::timerCallback()
     for (int i = 22; i < 24; ++i)
         knobs[(size_t) i]->slider.setAlpha (postButton.getToggleState() ? 1.0f : 0.35f);
 
+    // meters: instant rise, smooth fall
+    auto fall = [] (float shown, float now) { return now > shown ? now : shown - 1.5f; };
+    preMeter = fall (preMeter, proc.preMeterDb.load());
+    postMeter = fall (postMeter, proc.postMeterDb.load());
+
     shownNote = proc.displayNote.load();
     shownLevel = proc.displayLevel.load();
     scope[(size_t) scopePos] = shownLevel;
@@ -282,6 +287,36 @@ void VoltstringEditor::paint (juce::Graphics& g)
         drawGateTitle (4, "POST GATE", "final output");
         g.setColour (colours::track);
         g.fillRect (row4.getCentreX(), row4.getY() + 12, 1, row4.getHeight() - 24);
+
+        // live meter + threshold line + open/closed light, to the right of each ON/OFF switch
+        auto drawMeter = [&] (juce::TextButton& btn, float levelDb, const char* threshId, bool isOpen)
+        {
+            const bool on = btn.getToggleState();
+            auto bb = btn.getBounds();
+            auto m = juce::Rectangle<float> ((float) bb.getRight() + 12.0f, (float) bb.getCentreY() - 5.0f,
+                                             (float) (cw * 2 - 64 - 34 - 20), 10.0f);
+            auto toX = [&] (float dbv) { return m.getX() + m.getWidth() * juce::jlimit (0.0f, 1.0f, (dbv + 80.0f) / 80.0f); };
+            g.setColour (colours::bg);
+            g.fillRoundedRectangle (m, 3.0f);
+            g.setColour (colours::accent4.withAlpha (on ? 0.85f : 0.35f));
+            g.fillRoundedRectangle (m.withRight (toX (levelDb)), 3.0f);
+            const float th = proc.apvts.getRawParameterValue (threshId)->load();
+            g.setColour (colours::text.withAlpha (on ? 1.0f : 0.4f));
+            g.fillRect (toX (th) - 1.0f, m.getY() - 4.0f, 2.0f, m.getHeight() + 8.0f);
+
+            // light: green = open (sound passes), red = closed (muted)
+            auto led = juce::Rectangle<float> (m.getRight() + 10.0f, m.getCentreY() - 5.0f, 10.0f, 10.0f);
+            g.setColour (! on ? colours::track : isOpen ? colours::accent4 : juce::Colour (0xffe0524a));
+            g.fillEllipse (led);
+
+            g.setColour (colours::dim);
+            g.setFont (juce::FontOptions (10.0f));
+            g.drawText (on ? (isOpen ? "open" : "closed") : "bypassed",
+                        juce::Rectangle<float> (m.getX(), m.getBottom() + 4.0f, m.getWidth(), 12.0f).toNearestInt(),
+                        juce::Justification::left);
+        };
+        drawMeter (preButton, preMeter, "pre_thresh", proc.preGateOpen.load());
+        drawMeter (postButton, postMeter, "post_thresh", proc.postGateOpen.load());
     }
 
     // envelope section title + ADSR shape preview
